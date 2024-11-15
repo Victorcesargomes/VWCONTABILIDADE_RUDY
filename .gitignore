@@ -1,0 +1,6 @@
+.env
+mensagens/
+__pycache__/
+*.pkl
+vwenv/
+
