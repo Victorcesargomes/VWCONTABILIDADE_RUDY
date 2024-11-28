@@ -3,4 +3,6 @@ mensagens/
 __pycache__/
 *.pkl
 vwenv/
+.~lock.rudy_dados_empresa.csv#
+
 
