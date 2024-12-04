@@ -7,7 +7,7 @@ langchain-text-splitters==0.3.2
 langsmith==0.1.142
 matplotlib==3.9.2
 numpy==1.26.4
-openai==1.54.3
+openai==1.55.3
 pandas==2.2.3
 plotly==5.24.1
 python-dotenv==1.0.1
