@@ -6,132 +6,63 @@ import os
 from pathlib import Path
 import plotly.express as px
 import plotly.graph_objects as go
-import pickle
 from unidecode import unidecode
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain_openai import ChatOpenAI
+from langchain.output_parsers import OutputFixingParser
+from langchain_core.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, Field
+from typing import List
 
 # Carregar a logo e exibi-la na barra lateral
 def exibir_logo():
-    # Exibe uma imagem chamada "logo.png" na barra lateral.
     st.sidebar.image("logo.png", use_container_width=True)
 
-# Prompt base para o agente de IA, definindo o contexto do chatbot.
+# Prompt base para o agente de IA
 SYSTEM_PROMPT = '''
 Você é Victor, um Analista Contábil da empresa VW Contabilidade, especializado nos dados financeiros da empresa Rudy LTDA.
-Sua função é fornecer análises financeiras e respostas precisas baseadas nos dados disponíveis, ajudando a empresa a tomar decisões informadas.
-Por favor, responda todas as perguntas em português.
+Sua função é fornecer análises financeiras e respostas precisas baseadas nos dados disponíveis, ajudando a empresa a tomar decisões informadas. Respostas somente em português. 
+Sempre termine a resposta com o nome Rudy.
 '''
 
+# Classe Pydantic para validar a saída do modelo
+class FinancialResponse(BaseModel):
+    resposta: str = Field(description="A resposta gerada pelo modelo")
+
 # Carrega as variáveis de ambiente do arquivo .env
-load_dotenv()  # Configura as variáveis de ambiente definidas no arquivo .env.
-openai_key = os.getenv("OPENAI_API_KEY")  # Busca a chave da API OpenAI.
+load_dotenv()
+openai_key = os.getenv("OPENAI_API_KEY")
 
-# Diretório onde as mensagens serão armazenadas
-PASTA_MENSAGENS = Path(__file__).parent / 'mensagens'  # Define um diretório para armazenar mensagens.
-PASTA_MENSAGENS.mkdir(exist_ok=True)  # Garante que o diretório exista.
+# Função para criar o parser de saída com correção
+def criar_parser_correcoes():
+    llm = ChatOpenAI(api_key=openai_key, model="gpt-4o")
+    pydantic_parser = PydanticOutputParser(pydantic_object=FinancialResponse)
+    return OutputFixingParser.from_llm(parser=pydantic_parser, llm=llm)
 
-# Função para invocar o modelo de IA e obter uma resposta
-def retorna_resposta_modelo(dataframe, prompt, modelo='gpt-4o-mini', temperatura=0.2):
+def retorna_resposta_modelo(dataframe, prompt, modelo='gpt-4o', temperatura=0.2):
     """
     Usa o modelo GPT para processar um dataframe e retornar uma resposta para um prompt dado.
+    Retorna o texto puro, sem aspas e sem prefixos como 'resposta'.
     """
-    # Inicializa o modelo GPT-4 com a API do OpenAI.
     llm = ChatOpenAI(api_key=openai_key, model=modelo, temperature=temperatura)
-    # Cria um agente que interage com o dataframe.
     agent = create_pandas_dataframe_agent(llm, dataframe, allow_dangerous_code=True)
+
+    # Criar o parser com correções
+    output_parser = criar_parser_correcoes()
+
     try:
-        # Invoca o modelo com o prompt e o contexto definido.
+        # Invocar o modelo com o prompt e contexto definido
         resposta = agent.invoke([
-            {"role": "system", "content": SYSTEM_PROMPT}, 
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt}
         ])
-        # Processa a resposta para extrair o texto.
-        resposta_texto = resposta.get('output', "Nenhuma resposta foi gerada pelo agente.") if isinstance(resposta, dict) else str(resposta)
-        return f"Rudy, {resposta_texto}"
+        # Tentar corrigir a saída usando o OutputFixingParser
+        resposta_formatada = output_parser.parse(resposta.get("output", ""))
+        # Retorna apenas o conteúdo textual da resposta
+        return resposta_formatada.resposta.strip()  # Remove possíveis espaços adicionais
     except Exception as e:
-        # Trata erros na invocação do modelo.
-        print("Erro ao invocar o modelo:", e)
+        print("Erro ao invocar o modelo ou ao corrigir saída:", e)
         return "Desculpe, ocorreu um erro ao processar a resposta."
-
-# Função para normalizar o nome de uma mensagem para um formato válido de arquivo
-def converte_nome_mensagem(nome_mensagem):
-    """
-    Converte o nome de uma mensagem para um formato seguro para usar como nome de arquivo.
-    """
-    if not nome_mensagem:
-        return "nome_invalido"
-    nome_arquivo = unidecode(nome_mensagem)  # Remove acentos.
-    nome_arquivo = re.sub(r'[^\w\s-]', '', nome_arquivo).strip()  # Remove caracteres especiais.
-    nome_arquivo = re.sub(r'[\s]+', '-', nome_arquivo)  # Substitui espaços por traços.
-    return nome_arquivo[:50].lower()  # Limita a 50 caracteres e converte para minúsculas.
-
-# Função para salvar as mensagens da conversa no disco
-def salvar_mensagens(mensagens):
-    """
-    Salva as mensagens de uma conversa em um arquivo no formato pickle.
-    """
-    if len(mensagens) == 0:
-        return False
-
-    # Usa a primeira mensagem do usuário como base para o nome do arquivo.
-    nome_mensagem = ''
-    for mensagem in mensagens:
-        if mensagem['role'] == 'user':
-            nome_mensagem = mensagem['content'][:50]
-            break
-
-    nome_arquivo = converte_nome_mensagem(nome_mensagem)
-    caminho_arquivo = PASTA_MENSAGENS / f"{nome_arquivo}.pkl"
-
-    try:
-        # Salva a conversa no arquivo.
-        with open(caminho_arquivo, 'wb') as f:
-            pickle.dump({'nome_mensagem': nome_mensagem, 'mensagens': mensagens}, f)
-        return True
-    except Exception as e:
-        # Trata erros ao salvar.
-        print(f"Erro ao salvar o arquivo: {e}")
-        return False
-
-# Função para listar todas as conversas salvas
-def listar_conversas():
-    """
-    Retorna uma lista de conversas salvas, ordenadas por data de modificação.
-    """
-    conversas = list(PASTA_MENSAGENS.glob('*.pkl'))
-    conversas = sorted(conversas, key=lambda item: item.stat().st_mtime_ns, reverse=True)
-    return [c.stem for c in conversas]
-
-# Função para carregar uma conversa pelo nome do arquivo
-def ler_mensagem_por_nome_arquivo(nome_arquivo):
-    """
-    Lê mensagens salvas de um arquivo específico.
-    """
-    caminho_arquivo = PASTA_MENSAGENS / f"{nome_arquivo}.pkl"
-    if not caminho_arquivo.exists():
-        st.error(f"Arquivo {caminho_arquivo} não encontrado.")
-        return []
-    try:
-        with open(caminho_arquivo, 'rb') as f:
-            dados = pickle.load(f)
-            return dados.get('mensagens', [])
-    except Exception as e:
-        st.error(f"Erro ao carregar o arquivo: {e}")
-        return []
-
-# Função para selecionar uma conversa salva e atualizar o estado da aplicação
-def carregar_conversa(nome_arquivo):
-    """
-    Carrega uma conversa específica no estado da aplicação (st.session_state).
-    """
-    mensagens = ler_mensagem_por_nome_arquivo(nome_arquivo)
-    if mensagens:
-        st.session_state.mensagens = mensagens  # Atualiza o estado com as mensagens carregadas.
-        st.session_state.saudacao_enviada = True  # Marca que a saudação já foi enviada.
-        st.success(f"Conversa '{nome_arquivo}' carregada com sucesso!")  # Exibe mensagem de sucesso.
-    else:
-        st.error("Não foi possível carregar a conversa.")  # Exibe mensagem de erro.
 
 # Gráfico interativo de faturamento mensal
 def gerar_grafico_faturamento(dataframe):
@@ -167,7 +98,6 @@ def gerar_grafico_tributos(dataframe):
     )
     st.plotly_chart(fig)  # Renderiza o gráfico no Streamlit.
 
-
 # Gráfico interativo de alíquota efetiva
 def gerar_grafico_aliquota(dataframe):
     """
@@ -178,39 +108,18 @@ def gerar_grafico_aliquota(dataframe):
     fig.update_layout(xaxis_title="Mês", yaxis_title="Alíquota Efetiva (%)", xaxis_tickangle=45)
     st.plotly_chart(fig)  # Renderiza o gráfico no Streamlit.
 
-# Aba para listar e selecionar conversas
-def tab_conversas():
+# Aba para iniciar nova conversa
+def tab_nova_conversa():
     """
-    Interface para gerenciar conversas salvas na barra lateral.
+    Interface para iniciar uma nova conversa na barra lateral.
     """
-    st.sidebar.subheader("Conversas Salvas")  # Subtítulo na barra lateral.
+    st.sidebar.subheader("Gerenciar Conversas")  # Subtítulo na barra lateral.
 
-    # Botão para iniciar uma nova conversa.
+    # Botão para iniciar uma nova conversa
     if st.sidebar.button("➕ Nova Conversa"):
         st.session_state.mensagens = []  # Limpa as mensagens existentes.
         st.session_state.saudacao_enviada = False  # Marca que uma saudação ainda não foi enviada.
         st.sidebar.success("Nova conversa iniciada!")  # Mensagem de sucesso.
-
-    conversas = listar_conversas()  # Obtém a lista de conversas salvas.
-    if not conversas:
-        st.sidebar.info("Nenhuma conversa salva.")  # Mensagem informativa se não houver conversas.
-        return
-
-    # Lista as conversas na barra lateral.
-    for nome_arquivo in conversas:
-        if st.sidebar.button(nome_arquivo):  # Adiciona um botão para cada conversa.
-            carregar_conversa(nome_arquivo)  # Carrega a conversa selecionada.
-
-# Aba de configurações
-def tab_configuracoes():
-    """
-    Aba de configurações para exibir informações do modelo utilizado.
-    """
-    st.sidebar.subheader("Configurações")
-    st.write("**Configurações Gerais**")
-    st.write(f"Modelo GPT Utilizado: `gpt-4`")
-    st.write("Configuração de Temperatura: `0.2`")
-    st.write("Configuração de segurança de código: Permitido")
 
 # Página principal da aplicação
 def pagina_principal():
@@ -274,26 +183,14 @@ def pagina_principal():
         if st.button("Alíquota Efetiva"):
             gerar_grafico_aliquota(dataframe)
 
-    # Botão para salvar a conversa atual.
-    if st.button("Salvar Conversa"):
-        if salvar_mensagens(st.session_state.mensagens):
-            st.success("Conversa salva com sucesso!")
-        else:
-            st.error("Erro ao salvar a conversa.")
-
 # Função principal da aplicação
 def main():
     """
     Função principal que gerencia a interface e o fluxo da aplicação.
     """
     exibir_logo()  # Exibe a logo na barra lateral.
-    aba_selecionada = st.sidebar.radio("Menu", ["Conversas", "Configurações"], index=0)  # Seleção de abas.
-    if aba_selecionada == "Conversas":
-        pagina_principal()  # Exibe a página principal.
-        tab_conversas()  # Exibe a aba de conversas.
-    elif aba_selecionada == "Configurações":
-        tab_configuracoes()  # Exibe a aba de configurações.
+    tab_nova_conversa()  # Adiciona a funcionalidade de iniciar nova conversa.
+    pagina_principal()  # Exibe a página principal.
 
-# Inicia a aplicação
 if __name__ == '__main__':
     main()
