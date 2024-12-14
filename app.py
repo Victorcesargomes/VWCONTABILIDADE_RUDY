@@ -35,33 +35,52 @@ openai_key = os.getenv("OPENAI_API_KEY")
 
 # Função para criar o parser de saída com correção
 def criar_parser_correcoes():
-    llm = ChatOpenAI(api_key=openai_key, model="gpt-4o")
-    pydantic_parser = PydanticOutputParser(pydantic_object=FinancialResponse)
-    return OutputFixingParser.from_llm(parser=pydantic_parser, llm=llm)
+    """
+    Cria um parser que utiliza o OutputFixingParser para corrigir saídas inválidas do modelo.
+    """
+    try:
+        print("Inicializando o modelo LLM...")
+        llm = ChatOpenAI(api_key=openai_key, model="gpt-4o")
+        
+        print("Criando o parser Pydantic...")
+        pydantic_parser = PydanticOutputParser(pydantic_object=FinancialResponse)
+        
+        print("Configurando o OutputFixingParser...")
+        fixing_parser = OutputFixingParser.from_llm(
+            parser=pydantic_parser,
+            llm=llm,
+        )
+        return fixing_parser
+    except Exception as e:
+        print(f"Erro ao criar o parser com correções: {e}")
+        raise
 
 def retorna_resposta_modelo(dataframe, prompt, modelo='gpt-4o', temperatura=0.2):
     """
     Usa o modelo GPT para processar um dataframe e retornar uma resposta para um prompt dado.
     Retorna o texto puro, sem aspas e sem prefixos como 'resposta'.
     """
-    llm = ChatOpenAI(api_key=openai_key, model=modelo, temperature=temperatura)
-    agent = create_pandas_dataframe_agent(llm, dataframe, allow_dangerous_code=True)
-
-    # Criar o parser com correções
-    output_parser = criar_parser_correcoes()
-
     try:
+        # Inicializa o modelo GPT
+        llm = ChatOpenAI(api_key=openai_key, model=modelo, temperature=temperatura)
+        agent = create_pandas_dataframe_agent(llm, dataframe, allow_dangerous_code=True)
+
+        # Criar o parser com correções
+        output_parser = criar_parser_correcoes()
+
         # Invocar o modelo com o prompt e contexto definido
         resposta = agent.invoke([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": prompt}
         ])
-        # Tentar corrigir a saída usando o OutputFixingParser
-        resposta_formatada = output_parser.parse(resposta.get("output", ""))
-        # Retorna apenas o conteúdo textual da resposta
-        return resposta_formatada.resposta.strip()  # Remove possíveis espaços adicionais
+
+        # Validar e corrigir a saída
+        parsed_response = output_parser.parse(resposta.get("output", ""))
+        
+        # Retorna apenas o texto da resposta
+        return parsed_response.resposta.strip()
     except Exception as e:
-        print("Erro ao invocar o modelo ou ao corrigir saída:", e)
+        print(f"Erro ao processar o modelo ou corrigir a saída: {e}")
         return "Desculpe, ocorreu um erro ao processar a resposta."
 
 # Gráfico interativo de faturamento mensal
